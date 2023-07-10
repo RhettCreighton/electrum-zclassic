@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 #
-# Electrum - lightweight Bitcoin client
+# Electrum - lightweight ZClassic client
 # Copyright (C) 2015 Thomas Voegtlin
 #
 # Permission is hereby granted, free of charge, to any person
@@ -25,6 +25,8 @@
 import ast
 import os
 import time
+import traceback
+import sys
 
 # from jsonrpc import JSONRPCResponseManager
 import jsonrpclib
@@ -121,13 +123,12 @@ class Daemon(DaemonThread):
         self.config = config
         if config.get('offline'):
             self.network = None
-            self.fx = None
         else:
             self.network = Network(config)
             self.network.start()
-            self.fx = FxThread(config, self.network)
+        self.fx = FxThread(config, self.network)
+        if self.network:
             self.network.add_jobs([self.fx])
-
         self.gui = None
         self.wallets = {}
         # Setup JSONRPC server
@@ -172,8 +173,9 @@ class Daemon(DaemonThread):
         elif sub == 'load_wallet':
             path = config.get_wallet_path()
             wallet = self.load_wallet(path, config.get('password'))
-            self.cmd_runner.wallet = wallet
-            response = True
+            if wallet is not None:
+                self.cmd_runner.wallet = wallet
+            response = wallet is not None
         elif sub == 'close_wallet':
             path = config.get_wallet_path()
             if path in self.wallets:
@@ -184,6 +186,9 @@ class Daemon(DaemonThread):
         elif sub == 'status':
             if self.network:
                 p = self.network.get_parameters()
+                current_wallet = self.cmd_runner.wallet
+                current_wallet_path = current_wallet.storage.path \
+                                      if current_wallet else None
                 response = {
                     'path': self.network.config.path,
                     'server': p[0],
@@ -195,6 +200,7 @@ class Daemon(DaemonThread):
                     'version': ELECTRUM_VERSION,
                     'wallets': {k: w.is_up_to_date()
                                 for k, w in self.wallets.items()},
+                    'current_wallet': current_wallet_path,
                     'fee_per_kb': self.config.fee_per_kb(),
                 }
             else:
@@ -263,7 +269,7 @@ class Daemon(DaemonThread):
             path = config.get_wallet_path()
             wallet = self.wallets.get(path)
             if wallet is None:
-                return {'error': 'Wallet "%s" is not loaded. Use "electrum daemon load_wallet"'%os.path.basename(path) }
+                return {'error': 'Wallet "%s" is not loaded. Use "electrum-zclassic daemon load_wallet"'%os.path.basename(path) }
         else:
             wallet = None
         # arguments passed to function
@@ -299,6 +305,10 @@ class Daemon(DaemonThread):
         gui_name = config.get('gui', 'qt')
         if gui_name in ['lite', 'classic']:
             gui_name = 'qt'
-        gui = __import__('electrum_gui.' + gui_name, fromlist=['electrum_gui'])
+        gui = __import__('electrum_zclassic_gui.' + gui_name, fromlist=['electrum_zclassic_gui'])
         self.gui = gui.ElectrumGui(config, self, plugins)
-        self.gui.main()
+        try:
+            self.gui.main()
+        except BaseException as e:
+            traceback.print_exc(file=sys.stdout)
+            # app will exit now

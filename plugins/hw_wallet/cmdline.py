@@ -1,4 +1,4 @@
-from electrum.util import print_msg, print_error, raw_input
+from electrum_zclassic.util import print_msg, print_error, raw_input
 
 class CmdLineHandler:
 
@@ -30,6 +30,9 @@ class CmdLineHandler:
         pass
 
     def show_message(self, msg, on_cancel=None):
+        print_msg(msg)
+
+    def show_error(self, msg):
         print_msg(msg)
 
     def update_status(self, b):

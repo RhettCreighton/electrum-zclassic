@@ -4,7 +4,7 @@ from kivy.factory import Factory
 from kivy.properties import NumericProperty, StringProperty, BooleanProperty
 from kivy.core.window import Window
 
-from electrum_gui.kivy.i18n import _
+from electrum_zclassic_gui.kivy.i18n import _
 
 
 
@@ -143,7 +143,7 @@ class InfoBubble(Factory.Bubble):
         else:
             Window.add_widget(self)
 
-        # wait for the bubble to adjust it's size according to text then animate
+        # wait for the bubble to adjust its size according to text then animate
         Clock.schedule_once(lambda dt: self._show(pos, duration))
 
     def _show(self, pos, duration):

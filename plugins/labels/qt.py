@@ -1,14 +1,16 @@
 from functools import partial
+import traceback
+import sys
 
 from PyQt5.QtGui import *
 from PyQt5.QtCore import *
 from PyQt5.QtWidgets import (QHBoxLayout, QLabel, QVBoxLayout)
 
-from electrum.plugins import hook
-from electrum.i18n import _
-from electrum_gui.qt import EnterButton
-from electrum_gui.qt.util import ThreadedButton, Buttons
-from electrum_gui.qt.util import WindowModalDialog, OkButton
+from electrum_zclassic.plugins import hook
+from electrum_zclassic.i18n import _
+from electrum_zclassic_gui.qt import EnterButton
+from electrum_zclassic_gui.qt.util import ThreadedButton, Buttons
+from electrum_zclassic_gui.qt.util import WindowModalDialog, OkButton
 
 from .labels import LabelsPlugin
 
@@ -37,10 +39,12 @@ class Plugin(LabelsPlugin):
         hbox.addWidget(QLabel("Label sync options:"))
         upload = ThreadedButton("Force upload",
                                 partial(self.push_thread, wallet),
-                                partial(self.done_processing, d))
+                                partial(self.done_processing_success, d),
+                                partial(self.done_processing_error, d))
         download = ThreadedButton("Force download",
                                   partial(self.pull_thread, wallet, True),
-                                  partial(self.done_processing, d))
+                                  partial(self.done_processing_success, d),
+                                  partial(self.done_processing_error, d))
         vbox = QVBoxLayout()
         vbox.addWidget(upload)
         vbox.addWidget(download)
@@ -54,13 +58,20 @@ class Plugin(LabelsPlugin):
     def on_pulled(self, wallet):
         self.obj.labels_changed_signal.emit(wallet)
 
-    def done_processing(self, dialog, result):
+    def done_processing_success(self, dialog, result):
         dialog.show_message(_("Your labels have been synchronised."))
 
+    def done_processing_error(self, dialog, result):
+        traceback.print_exception(*result, file=sys.stderr)
+        dialog.show_error(_("Error synchronising labels") + ':\n' + str(result[:2]))
+
     @hook
-    def on_new_window(self, window):
+    def load_wallet(self, wallet, window):
+        # FIXME if the user just enabled the plugin, this hook won't be called
+        # as the wallet is already loaded, and hence the plugin will be in
+        # a non-functional state for that window
         self.obj.labels_changed_signal.connect(window.update_tabs)
-        self.start_wallet(window.wallet)
+        self.start_wallet(wallet)
 
     @hook
     def on_close_window(self, window):

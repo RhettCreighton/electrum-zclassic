@@ -5,9 +5,9 @@ from kivy.lang import Builder
 from kivy.clock import Clock
 from kivy.uix.label import Label
 
-from electrum_gui.kivy.i18n import _
+from electrum_zclassic_gui.kivy.i18n import _
 from datetime import datetime
-from electrum.util import InvalidPassword
+from electrum_zclassic.util import InvalidPassword
 
 Builder.load_string('''
 
@@ -17,9 +17,9 @@ Builder.load_string('''
     is_mine: True
     can_sign: False
     can_broadcast: False
-    can_rbf: False
     fee_str: ''
     date_str: ''
+    date_label:''
     amount_str: ''
     tx_hash: ''
     status_str: ''
@@ -46,7 +46,7 @@ Builder.load_string('''
                         text: _('Description') if root.description else ''
                         value: root.description
                     BoxLabel:
-                        text: _('Date') if root.date_str else ''
+                        text: root.date_label
                         value: root.date_str
                     BoxLabel:
                         text: _('Amount sent') if root.is_mine else _('Amount received')
@@ -74,13 +74,12 @@ Builder.load_string('''
             Button:
                 size_hint: 0.5, None
                 height: '48dp'
-                text: _('Sign') if root.can_sign else _('Broadcast') if root.can_broadcast else _('Bump fee') if root.can_rbf else ''
-                disabled: not(root.can_sign or root.can_broadcast or root.can_rbf)
+                text: _('Sign') if root.can_sign else _('Broadcast') if root.can_broadcast else ''
+                disabled: not(root.can_sign or root.can_broadcast)
                 opacity: 0 if self.disabled else 1
                 on_release:
                     if root.can_sign: root.do_sign()
                     if root.can_broadcast: root.do_broadcast()
-                    if root.can_rbf: root.do_rbf()
             IconButton:
                 size_hint: 0.5, None
                 height: '48dp'
@@ -107,13 +106,16 @@ class TxDialog(Factory.Popup):
 
     def update(self):
         format_amount = self.app.format_amount_and_units
-        tx_hash, self.status_str, self.description, self.can_broadcast, self.can_rbf, amount, fee, height, conf, timestamp, exp_n = self.wallet.get_tx_info(self.tx)
+        tx_hash, self.status_str, self.description, self.can_broadcast, amount, fee, height, conf, timestamp, exp_n = self.wallet.get_tx_info(self.tx)
         self.tx_hash = tx_hash or ''
         if timestamp:
+            self.date_label = _('Date')
             self.date_str = datetime.fromtimestamp(timestamp).isoformat(' ')[:-3]
         elif exp_n:
-            self.date_str = _('Within %d blocks') % exp_n if exp_n > 0 else _('unknown (low fee)')
+            self.date_label = _('Mempool depth')
+            self.date_str = _('{} from tip').format('%.2f MB'%(exp_n/1000000))
         else:
+            self.date_label = ''
             self.date_str = ''
 
         if amount is None:
@@ -127,31 +129,6 @@ class TxDialog(Factory.Popup):
         self.fee_str = format_amount(fee) if fee is not None else _('unknown')
         self.can_sign = self.wallet.can_sign(self.tx)
         self.ids.output_list.update(self.tx.outputs())
-
-    def do_rbf(self):
-        from .bump_fee_dialog import BumpFeeDialog
-        is_relevant, is_mine, v, fee = self.wallet.get_wallet_delta(self.tx)
-        size = self.tx.estimated_size()
-        d = BumpFeeDialog(self.app, fee, size, self._do_rbf)
-        d.open()
-
-    def _do_rbf(self, old_fee, new_fee, is_final):
-        if new_fee is None:
-            return
-        delta = new_fee - old_fee
-        if delta < 0:
-            self.app.show_error("fee too low")
-            return
-        try:
-            new_tx = self.wallet.bump_fee(self.tx, delta)
-        except BaseException as e:
-            self.app.show_error(str(e))
-            return
-        if is_final:
-            new_tx.set_rbf(False)
-        self.tx = new_tx
-        self.update()
-        self.do_sign()
 
     def do_sign(self):
         self.app.protected(_("Enter your PIN code in order to sign this transaction"), self._do_sign, ())
@@ -171,7 +148,7 @@ class TxDialog(Factory.Popup):
         self.app.broadcast(self.tx)
 
     def show_qr(self):
-        from electrum.bitcoin import base_encode, bfh
+        from electrum_zclassic.bitcoin import base_encode, bfh
         text = bfh(str(self.tx))
         text = base_encode(text, base=43)
         self.app.qr_dialog(_("Raw Transaction"), text)

@@ -1,4 +1,4 @@
-Electrum - Lightweight Bitcoin client
+Electrum-Zclassic - Lightweight Zclassic client
 =====================================
 
 ::
@@ -6,16 +6,12 @@ Electrum - Lightweight Bitcoin client
   Licence: MIT Licence
   Author: Thomas Voegtlin
   Language: Python
-  Homepage: https://electrum.org/
+  Homepage: https://github.com/ZclassicCommunity/electrum-zcl
 
 
-.. image:: https://travis-ci.org/spesmilo/electrum.svg?branch=master
-    :target: https://travis-ci.org/spesmilo/electrum
+.. image:: https://travis-ci.org/ZclassicCommunity/electrum-zcl.svg?branch=master
+    :target: https://travis-ci.org/ZclassicCommunity/electrum-zcl
     :alt: Build Status
-.. image:: https://coveralls.io/repos/github/spesmilo/electrum/badge.svg?branch=master
-    :target: https://coveralls.io/github/spesmilo/electrum?branch=master
-    :alt: Test coverage statistics
-
 
 
 
@@ -24,28 +20,30 @@ Electrum - Lightweight Bitcoin client
 Getting started
 ===============
 
-Electrum is a pure python application. If you want to use the
+Electrum-Zclassic is a pure python application. If you want to use the
 Qt interface, install the Qt dependencies::
 
     sudo apt-get install python3-pyqt5
 
 If you downloaded the official package (tar.gz), you can run
-Electrum from its root directory, without installing it on your
+Electrum-Zclassic from its root directory, without installing it on your
 system; all the python dependencies are included in the 'packages'
-directory. To run Electrum from its root directory, just do::
+directory. To run Electrum-Zclassic from its root directory, just do::
 
-    ./electrum
+    ./electrum-zclassic
 
-You can also install Electrum on your system, by running this command::
+You can also install Electrum-Zclassic on your system, by running this command::
 
     sudo apt-get install python3-setuptools
-    python3 setup.py install
+    pip3 install .[full]
 
 This will download and install the Python dependencies used by
-Electrum, instead of using the 'packages' directory.
+Electrum-Zclassic, instead of using the 'packages' directory.
+The 'full' extra contains some optional dependencies that we think
+are often useful but they are not strictly needed.
 
 If you cloned the git repository, you need to compile extra files
-before you can run Electrum. Read the next section, "Development
+before you can run Electrum-Zclassic. Read the next section, "Development
 Version".
 
 
@@ -53,14 +51,14 @@ Version".
 Development version
 ===================
 
-Check out the code from Github::
+Check out the code from GitHub::
 
-    git clone git://github.com/spesmilo/electrum.git
-    cd electrum
+    git clone git://github.com/ZclassicCommunity/electrum-zclassic.git
+    cd electrum-zclassic
 
 Run install (this should install dependencies)::
 
-    python3 setup.py install
+    pip3 install .[full]
 
 Compile the icons file for Qt::
 
@@ -88,26 +86,7 @@ To create binaries, create the 'packages' directory::
 
     ./contrib/make_packages
 
-This directory contains the python dependencies used by Electrum.
-
-Mac OS X / macOS
---------
-
-::
-
-    # On MacPorts installs: 
-    sudo python3 setup-release.py py2app
-    
-    # On Homebrew installs: 
-    ARCHFLAGS="-arch i386 -arch x86_64" sudo python3 setup-release.py py2app --includes sip
-    
-    sudo hdiutil create -fs HFS+ -volname "Electrum" -srcfolder dist/Electrum.app dist/electrum-VERSION-macosx.dmg
-
-Windows
--------
-
-See `contrib/build-wine/README` file.
-
+This directory contains the python dependencies used by Electrum-Zclassic.
 
 Android
 -------

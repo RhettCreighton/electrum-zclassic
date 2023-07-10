@@ -1,4 +1,4 @@
-from electrum.plugins import hook
+from electrum_zclassic.plugins import hook
 from .digitalbitbox import DigitalBitboxPlugin
 from ..hw_wallet import CmdLineHandler
 
@@ -9,3 +9,6 @@ class Plugin(DigitalBitboxPlugin):
         if not isinstance(keystore, self.keystore_class):
             return
         keystore.handler = self.handler
+
+    def create_handler(self, window):
+        return self.handler

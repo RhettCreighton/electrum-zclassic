@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 #
-# Electrum - lightweight Bitcoin client
+# Electrum - lightweight ZClassic client
 # Copyright (C) 2012 thomasv@gitorious
 #
 # Permission is hereby granted, free of charge, to any person
@@ -25,6 +25,7 @@
 
 import signal
 import sys
+import traceback
 
 
 try:
@@ -37,14 +38,15 @@ from PyQt5.QtWidgets import *
 from PyQt5.QtCore import *
 import PyQt5.QtCore as QtCore
 
-from electrum.i18n import _, set_language
-from electrum.plugins import run_hook
-from electrum import WalletStorage
-# from electrum.synchronizer import Synchronizer
-# from electrum.verifier import SPV
-# from electrum.util import DebugMem
-from electrum.util import UserCancelled, print_error
-# from electrum.wallet import Abstract_Wallet
+from electrum_zclassic.i18n import _, set_language
+from electrum_zclassic.plugins import run_hook
+from electrum_zclassic import WalletStorage
+# from electrum_zclassic.synchronizer import Synchronizer
+# from electrum_zclassic.verifier import SPV
+# from electrum_zclassic.util import DebugMem
+from electrum_zclassic.util import (UserCancelled, print_error,
+                                WalletFileException, BitcoinException)
+# from electrum_zclassic.wallet import Abstract_Wallet
 
 from .installwizard import InstallWizard, GoBack
 
@@ -54,7 +56,7 @@ try:
 except Exception as e:
     print(e)
     print("Error: Could not find icons file.")
-    print("Please run 'pyrcc5 icons.qrc -o gui/qt/icons_rc.py', and reinstall Electrum")
+    print("Please run 'pyrcc5 icons.qrc -o gui/qt/icons_rc.py', and reinstall Electrum-Zclassic")
     sys.exit(1)
 
 from .util import *   # * needed for plugins
@@ -94,6 +96,8 @@ class ElectrumGui:
         QtCore.QCoreApplication.setAttribute(QtCore.Qt.AA_X11InitThreads)
         if hasattr(QtCore.Qt, "AA_ShareOpenGLContexts"):
             QtCore.QCoreApplication.setAttribute(QtCore.Qt.AA_ShareOpenGLContexts)
+        if hasattr(QGuiApplication, 'setDesktopFileName'):
+            QGuiApplication.setDesktopFileName('electrum-zclassic.desktop')
         self.config = config
         self.daemon = daemon
         self.plugins = plugins
@@ -107,7 +111,7 @@ class ElectrumGui:
         # init tray
         self.dark_icon = self.config.get("dark_icon", False)
         self.tray = QSystemTrayIcon(self.tray_icon(), None)
-        self.tray.setToolTip('Electrum')
+        self.tray.setToolTip('Electrum-Zclassic')
         self.tray.activated.connect(self.tray_activated)
         self.build_tray_menu()
         self.tray.show()
@@ -129,7 +133,7 @@ class ElectrumGui:
             submenu.addAction(_("Close"), window.close)
         m.addAction(_("Dark/Light"), self.toggle_tray_icon)
         m.addSeparator()
-        m.addAction(_("Exit Electrum"), self.close)
+        m.addAction(_("Exit Electrum-Zclassic"), self.close)
 
     def tray_icon(self):
         if self.dark_icon:
@@ -161,7 +165,7 @@ class ElectrumGui:
 
     def show_network_dialog(self, parent):
         if not self.daemon.network:
-            parent.show_warning(_('You are using Electrum in offline mode; restart Electrum if you want to get connected'), title=_('Offline'))
+            parent.show_warning(_('You are using Electrum-Zclassic in offline mode; restart Electrum-Zclassic if you want to get connected'), title=_('Offline'))
             return
         if self.nd:
             self.nd.on_update()
@@ -182,33 +186,51 @@ class ElectrumGui:
 
     def start_new_window(self, path, uri):
         '''Raises the window for the wallet if it is open.  Otherwise
-        opens the wallet and creates a new window for it.'''
-        for w in self.windows:
-            if w.wallet.storage.path == path:
-                w.bring_to_top()
-                break
-        else:
+        opens the wallet and creates a new window for it'''
+        try:
+            wallet = self.daemon.load_wallet(path, None)
+        except BaseException as e:
+            traceback.print_exc(file=sys.stdout)
+            d = QMessageBox(QMessageBox.Warning, _('Error'),
+                            _('Cannot load wallet') + ' (1):\n' + str(e))
+            d.exec_()
+            return
+        if not wallet:
+            storage = WalletStorage(path, manual_upgrades=True)
+            wizard = InstallWizard(self.config, self.app, self.plugins, storage)
             try:
-                wallet = self.daemon.load_wallet(path, None)
-            except  BaseException as e:
-                d = QMessageBox(QMessageBox.Warning, _('Error'), 'Cannot load wallet:\n' + str(e))
+                wallet = wizard.run_and_get_wallet(self.daemon.get_wallet)
+            except UserCancelled:
+                pass
+            except GoBack as e:
+                print_error('[start_new_window] Exception caught (GoBack)', e)
+            except (WalletFileException, BitcoinException) as e:
+                traceback.print_exc(file=sys.stderr)
+                d = QMessageBox(QMessageBox.Warning, _('Error'),
+                                _('Cannot load wallet') + ' (2):\n' + str(e))
                 d.exec_()
                 return
-            if not wallet:
-                storage = WalletStorage(path, manual_upgrades=True)
-                wizard = InstallWizard(self.config, self.app, self.plugins, storage)
-                try:
-                    wallet = wizard.run_and_get_wallet()
-                except UserCancelled:
-                    pass
-                except GoBack as e:
-                    print_error('[start_new_window] Exception caught (GoBack)', e)
+            finally:
                 wizard.terminate()
-                if not wallet:
-                    return
+            if not wallet:
+                return
+
+            if not self.daemon.get_wallet(wallet.storage.path):
+                # wallet was not in memory
                 wallet.start_threads(self.daemon.network)
                 self.daemon.add_wallet(wallet)
+        try:
+            for w in self.windows:
+                if w.wallet.storage.path == wallet.storage.path:
+                    w.bring_to_top()
+                    return
             w = self.create_window_for_wallet(wallet)
+        except BaseException as e:
+            traceback.print_exc(file=sys.stdout)
+            d = QMessageBox(QMessageBox.Warning, _('Error'),
+                            _('Cannot create window for wallet') + ':\n' + str(e))
+            d.exec_()
+            return
         if uri:
             w.pay_to_URI(uri)
         w.bring_to_top()
@@ -241,8 +263,7 @@ class ElectrumGui:
             return
         except GoBack:
             return
-        except:
-            import traceback
+        except BaseException as e:
             traceback.print_exc(file=sys.stdout)
             return
         self.timer.start()

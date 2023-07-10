@@ -66,7 +66,7 @@ from kivy.uix.checkbox import CheckBox
 from kivy.uix.widget import Widget
 from kivy.clock import Clock
 
-from electrum_gui.kivy.i18n import _
+from electrum_zclassic_gui.kivy.i18n import _
 from functools import partial
 
 class FxDialog(Factory.Popup):
@@ -106,4 +106,6 @@ class FxDialog(Factory.Popup):
             if ccy != self.fx.get_currency():
                 self.fx.set_currency(ccy)
             self.app.fiat_unit = ccy
+        else:
+            self.app.is_fiat = False
         Clock.schedule_once(lambda dt: self.add_exchanges())

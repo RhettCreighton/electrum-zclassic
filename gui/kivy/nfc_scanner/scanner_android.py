@@ -1,4 +1,4 @@
-'''This is the Android implementatoin of NFC Scanning using the
+'''This is the Android implementation of NFC Scanning using the
 built in NFC adapter of some android phones.
 '''
 
@@ -10,7 +10,7 @@ if platform != 'android':
     raise ImportError
 import threading
 
-from electrum_gui.kivy.nfc_scanner import NFCBase
+from electrum_zclassic_gui.kivy.nfc_scanner import NFCBase
 from jnius import autoclass, cast
 from android.runnable import run_on_ui_thread
 from android import activity
@@ -33,8 +33,8 @@ app = None
 
 
 class ScannerAndroid(NFCBase):
-    ''' This is the class responsible for handling the interace with the
-    Android NFC adapter. See Module Documentation for deatils.
+    ''' This is the class responsible for handling the interface with the
+    Android NFC adapter. See Module Documentation for details.
     '''
 
     name = 'NFCAndroid'
@@ -46,7 +46,7 @@ class ScannerAndroid(NFCBase):
         global app
         app = App.get_running_app()
 
-        # Make sure we are listening to new intent 
+        # Make sure we are listening to new intent
         activity.bind(on_new_intent=self.on_new_intent)
 
         # Configure nfc
@@ -55,8 +55,8 @@ class ScannerAndroid(NFCBase):
         # Check if adapter exists
         if not self.nfc_adapter:
             return False
-        
-        # specify that we want our activity to remain on top whan a new intent
+
+        # specify that we want our activity to remain on top when a new intent
         # is fired
         self.nfc_pending_intent = PendingIntent.getActivity(context, 0,
             Intent(context, context.getClass()).addFlags(
@@ -128,10 +128,10 @@ class ScannerAndroid(NFCBase):
         return details
 
     def on_new_intent(self, intent):
-        ''' This functions is called when the application receives a
+        ''' This function is called when the application receives a
         new intent, for the ones the application has registered previously,
         either in the manifest or in the foreground dispatch setup in the
-        nfc_init function above. 
+        nfc_init function above.
         '''
 
         action_list = (NfcAdapter.ACTION_NDEF_DISCOVERED,)
@@ -165,26 +165,26 @@ class ScannerAndroid(NFCBase):
     def create_AAR(self):
         '''Create the record responsible for linking our application to the tag.
         '''
-        return NdefRecord.createApplicationRecord(JString("org.electrum.kivy"))
+        return NdefRecord.createApplicationRecord(JString("cash.z.electrum.kivy"))
 
     def create_TNF_EXTERNAL(self, data):
         '''Create our actual payload record.
         '''
         if BUILDVERSION >= 14:
-            domain = "org.electrum"
+            domain = "cash.z.electrum"
             stype = "externalType"
             extRecord = NdefRecord.createExternal(domain, stype, data)
         else:
             # Creating the NdefRecord manually:
             extRecord = NdefRecord(
                 NdefRecord.TNF_EXTERNAL_TYPE,
-                "org.electrum:externalType",
+                "cash.z.electrum:externalType",
                 '',
                 data)
         return extRecord
 
     def create_ndef_message(self, *recs):
-        ''' Create the Ndef message that will written to tag
+        ''' Create the Ndef message that will be written to tag
         '''
         records = []
         for record in recs:
@@ -213,8 +213,8 @@ class ScannerAndroid(NFCBase):
         # Create record
         ndef_record = NdefRecord(
                 NdefRecord.TNF_MIME_MEDIA,
-                'org.electrum.kivy', '', data)
-        
+                'cash.z.electrum.kivy', '', data)
+
         # Create message
         ndef_message = NdefMessage([ndef_record])
 

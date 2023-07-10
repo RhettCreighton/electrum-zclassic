@@ -1,0 +1,24 @@
+#!/usr/bin/make -f
+
+export PYBUILD_NAME=electrum-zclassic
+
+%:
+	dh $@ --with python3 --buildsystem=pybuild
+
+override_dh_installchangelogs::
+	dh_installchangelogs -k RELEASE-NOTES
+
+override_dh_auto_build::
+	pyrcc5 icons.qrc -o gui/qt/icons_rc.py
+	dh_auto_build
+
+override_dh_auto_install::
+	dh_auto_install
+	mkdir -p debian/electrum-zclassic/usr/bin \
+             debian/electrum-zclassic/usr/share
+	mv debian/python3-electrum-zclassic/usr/bin \
+       debian/electrum-zclassic/usr
+	mv debian/python3-electrum-zclassic/usr/share/applications \
+       debian/electrum-zclassic/usr/share
+	mv debian/python3-electrum-zclassic/usr/share/pixmaps \
+       debian/electrum-zclassic/usr/share

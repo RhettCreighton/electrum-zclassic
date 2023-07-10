@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 #
-# Electrum - lightweight Bitcoin client
+# Electrum - lightweight ZClassic client
 # Copyright (C) 2015 Thomas Voegtlin
 #
 # Permission is hereby granted, free of charge, to any person
@@ -199,7 +199,7 @@ def check_query(ns, sub, _type, keys):
     elif answer[1].rdtype == dns.rdatatype.RRSIG:
         rrset, rrsig = answer
     else:
-        raise BaseException('No signature set in record')
+        raise Exception('No signature set in record')
     if keys is None:
         keys = {dns.name.from_text(sub):rrset}
     dns.dnssec.validate(rrset, rrsig, keys)
@@ -248,7 +248,7 @@ def get_and_validate(ns, url, _type):
                 continue
             break
         else:
-            raise BaseException("DS does not match DNSKEY")
+            raise Exception("DS does not match DNSKEY")
         # set key for next iteration
         keys = {name: rrset}
     # get TXT record (signed by zone)

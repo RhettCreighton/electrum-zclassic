@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 #
-# Electrum - lightweight Bitcoin client
+# Electrum - lightweight ZClassic client
 # Copyright (C) 2012 thomasv@gitorious
 #
 # Permission is hereby granted, free of charge, to any person
@@ -32,7 +32,7 @@ try:
     sys.argv = ['']
     import kivy
 except ImportError:
-    # This error ideally shouldn't raised with pre-built packages
+    # This error ideally shouldn't be raised with pre-built packages
     sys.exit("Error: Could not import kivy. Please install it using the" + \
              "instructions mentioned here `http://kivy.org/#download` .")
 

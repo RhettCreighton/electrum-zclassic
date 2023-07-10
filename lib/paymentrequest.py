@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 #
-# Electrum - lightweight Bitcoin client
+# Electrum - lightweight ZClassic client
 # Copyright (C) 2014 Thomas Voegtlin
 #
 # Permission is hereby granted, free of charge, to any person
@@ -40,14 +40,15 @@ except ImportError:
 from . import bitcoin
 from . import util
 from .util import print_error, bh2u, bfh
+from .util import export_meta, import_meta
 from . import transaction
 from . import x509
 from . import rsakey
 
 from .bitcoin import TYPE_ADDRESS
 
-REQUEST_HEADERS = {'Accept': 'application/bitcoin-paymentrequest', 'User-Agent': 'Electrum'}
-ACK_HEADERS = {'Content-Type':'application/bitcoin-payment','Accept':'application/bitcoin-paymentack','User-Agent':'Electrum'}
+REQUEST_HEADERS = {'Accept': 'application/zclassic-paymentrequest', 'User-Agent': 'Electrum-Zclassic'}
+ACK_HEADERS = {'Content-Type':'application/zclassic-payment','Accept':'application/zclassic-paymentack','User-Agent':'Electrum-Zclassic'}
 
 ca_path = requests.certs.where()
 ca_list = None
@@ -75,9 +76,9 @@ def get_payment_request(url):
         try:
             response = requests.request('GET', url, headers=REQUEST_HEADERS)
             response.raise_for_status()
-            # Guard against `bitcoin:`-URIs with invalid payment request URLs
+            # Guard against `zclassic:`-URIs with invalid payment request URLs
             if "Content-Type" not in response.headers \
-            or response.headers["Content-Type"] != "application/bitcoin-paymentrequest":
+            or response.headers["Content-Type"] != "application/zclassic-paymentrequest":
                 data = None
                 error = "payment URL not pointing to a payment request handling server"
             else:
@@ -88,13 +89,13 @@ def get_payment_request(url):
             error = "payment URL not pointing to a valid server"
     elif u.scheme == 'file':
         try:
-            with open(u.path, 'r') as f:
+            with open(u.path, 'r', encoding='utf-8') as f:
                 data = f.read()
         except IOError:
             data = None
             error = "payment URL not pointing to a valid file"
     else:
-        raise BaseException("unknown scheme", url)
+        raise Exception("unknown scheme", url)
     pr = PaymentRequest(data, error)
     return pr
 
@@ -147,7 +148,7 @@ class PaymentRequest:
             self.error = "Error: Cannot parse payment request"
             return False
         if not pr.signature:
-            # the address will be dispayed as requestor
+            # the address will be displayed as requestor
             self.requestor = None
             return True
         if pr.pki_type in ["x509+sha256", "x509+sha1"]:
@@ -266,7 +267,7 @@ class PaymentRequest:
         paymnt.transactions.append(bfh(raw_tx))
         ref_out = paymnt.refund_to.add()
         ref_out.script = util.bfh(transaction.Transaction.pay_script(TYPE_ADDRESS, refund_addr))
-        paymnt.memo = "Paid using Electrum"
+        paymnt.memo = "Paid using Electrum-Zclassic"
         pm = paymnt.SerializeToString()
         payurl = urllib.parse.urlparse(pay_det.payment_url)
         try:
@@ -339,9 +340,9 @@ def verify_cert_chain(chain):
             x.check_date()
         else:
             if not x.check_ca():
-                raise BaseException("ERROR: Supplied CA Certificate Error")
+                raise Exception("ERROR: Supplied CA Certificate Error")
     if not cert_num > 1:
-        raise BaseException("ERROR: CA Certificate Chain Not Provided by Payment Processor")
+        raise Exception("ERROR: CA Certificate Chain Not Provided by Payment Processor")
     # if the root CA is not supplied, add it to the chain
     ca = x509_chain[cert_num-1]
     if ca.getFingerprint() not in ca_list:
@@ -351,7 +352,7 @@ def verify_cert_chain(chain):
             root = ca_list[f]
             x509_chain.append(root)
         else:
-            raise BaseException("Supplied CA Not Found in Trusted CA Store.")
+            raise Exception("Supplied CA Not Found in Trusted CA Store.")
     # verify the chain of signatures
     cert_num = len(x509_chain)
     for i in range(1, cert_num):
@@ -372,10 +373,10 @@ def verify_cert_chain(chain):
             hashBytes = bytearray(hashlib.sha512(data).digest())
             verify = pubkey.verify(sig, x509.PREFIX_RSA_SHA512 + hashBytes)
         else:
-            raise BaseException("Algorithm not supported")
+            raise Exception("Algorithm not supported")
             util.print_error(self.error, algo.getComponentByName('algorithm'))
         if not verify:
-            raise BaseException("Certificate not Signed by Provided CA Certificate Chain")
+            raise Exception("Certificate not Signed by Provided CA Certificate Chain")
 
     return x509_chain[0], ca
 
@@ -384,9 +385,9 @@ def check_ssl_config(config):
     from . import pem
     key_path = config.get('ssl_privkey')
     cert_path = config.get('ssl_chain')
-    with open(key_path, 'r') as f:
+    with open(key_path, 'r', encoding='utf-8') as f:
         params = pem.parse_private_key(f.read())
-    with open(cert_path, 'r') as f:
+    with open(cert_path, 'r', encoding='utf-8') as f:
         s = f.read()
     bList = pem.dePemList(s, "CERTIFICATE")
     # verify chain
@@ -404,10 +405,10 @@ def check_ssl_config(config):
 
 def sign_request_with_x509(pr, key_path, cert_path):
     from . import pem
-    with open(key_path, 'r') as f:
+    with open(key_path, 'r', encoding='utf-8') as f:
         params = pem.parse_private_key(f.read())
         privkey = rsakey.RSAKey(*params)
-    with open(cert_path, 'r') as f:
+    with open(cert_path, 'r', encoding='utf-8') as f:
         s = f.read()
         bList = pem.dePemList(s, "CERTIFICATE")
     certificates = pb2.X509Certificates()
@@ -452,7 +453,11 @@ class InvoiceStore(object):
 
     def set_paid(self, pr, txid):
         pr.tx = txid
-        self.paid[txid] = pr.get_id()
+        pr_id = pr.get_id()
+        self.paid[txid] = pr_id
+        if pr_id not in self.invoices:
+            # in case the user had deleted it previously
+            self.add(pr)
 
     def load(self, d):
         for k, v in d.items():
@@ -467,24 +472,29 @@ class InvoiceStore(object):
                 continue
 
     def import_file(self, path):
-        try:
-            with open(path, 'r') as f:
-                d = json.loads(f.read())
-                self.load(d)
-        except:
-            traceback.print_exc(file=sys.stderr)
-            return
+        def validate(data):
+            return data  # TODO
+        import_meta(path, validate, self.on_import)
+
+    def on_import(self, data):
+        self.load(data)
         self.save()
 
-    def save(self):
-        l = {}
+    def export_file(self, filename):
+        export_meta(self.dump(), filename)
+
+    def dump(self):
+        d = {}
         for k, pr in self.invoices.items():
-            l[k] = {
+            d[k] = {
                 'hex': bh2u(pr.raw),
                 'requestor': pr.requestor,
                 'txid': pr.tx
             }
-        self.storage.put('invoices', l)
+        return d
+
+    def save(self):
+        self.storage.put('invoices', self.dump())
 
     def get_status(self, key):
         pr = self.get(key)

@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 #
-# Electrum - lightweight Bitcoin client
+# Electrum - lightweight ZClassic client
 # Copyright (C) 2015 Thomas Voegtlin
 #
 # Permission is hereby granted, free of charge, to any person
@@ -23,10 +23,10 @@
 # CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-from electrum.i18n import _
-from electrum.util import format_time, age
-from electrum.plugins import run_hook
-from electrum.paymentrequest import PR_UNKNOWN
+from electrum_zclassic.i18n import _
+from electrum_zclassic.util import format_time, age
+from electrum_zclassic.plugins import run_hook
+from electrum_zclassic.paymentrequest import PR_UNKNOWN
 from PyQt5.QtGui import *
 from PyQt5.QtCore import *
 from PyQt5.QtWidgets import QTreeWidgetItem, QMenu
@@ -98,10 +98,10 @@ class RequestList(MyTreeWidget):
             amount_str = self.parent.format_amount(amount) if amount else ""
             item = QTreeWidgetItem([date, address, '', message, amount_str, pr_tooltips.get(status,'')])
             if signature is not None:
-                item.setIcon(2, QIcon(":icons/seal.png"))
+                item.setIcon(2, self.icon_cache.get(":icons/seal.png"))
                 item.setToolTip(2, 'signed by '+ requestor)
             if status is not PR_UNKNOWN:
-                item.setIcon(6, QIcon(pr_icons.get(status)))
+                item.setIcon(6, self.icon_cache.get(pr_icons.get(status)))
             self.addTopLevelItem(item)
 
 
@@ -115,7 +115,7 @@ class RequestList(MyTreeWidget):
         column_title = self.headerItem().text(column)
         column_data = item.text(column)
         menu = QMenu(self)
-        menu.addAction(_("Copy %s")%column_title, lambda: self.parent.app.clipboard().setText(column_data))
+        menu.addAction(_("Copy {}").format(column_title), lambda: self.parent.app.clipboard().setText(column_data))
         menu.addAction(_("Copy URI"), lambda: self.parent.view_and_paste('URI', '', self.parent.get_request_URI(addr)))
         menu.addAction(_("Save as BIP70 file"), lambda: self.parent.export_payment_request(addr))
         menu.addAction(_("Delete"), lambda: self.parent.delete_payment_request(addr))

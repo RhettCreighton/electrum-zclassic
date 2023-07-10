@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 #
-# Electrum - lightweight Bitcoin client
+# Electrum - lightweight ZClassic client
 # Copyright (C) 2015 Thomas Voegtlin
 #
 # Permission is hereby granted, free of charge, to any person
@@ -23,7 +23,7 @@
 # CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 from .util import *
-from electrum.i18n import _
+from electrum_zclassic.i18n import _
 
 
 class UTXOList(MyTreeWidget):
@@ -32,6 +32,7 @@ class UTXOList(MyTreeWidget):
     def __init__(self, parent=None):
         MyTreeWidget.__init__(self, parent, self.create_menu, [ _('Address'), _('Label'), _('Amount'), _('Height'), _('Output point')], 1)
         self.setSelectionMode(QAbstractItemView.ExtendedSelection)
+        self.setSortingEnabled(True)
 
     def get_name(self, x):
         return x.get('prevout_hash') + ":%d"%x.get('prevout_n')
@@ -46,10 +47,12 @@ class UTXOList(MyTreeWidget):
             height = x.get('height')
             name = self.get_name(x)
             label = self.wallet.get_label(x.get('prevout_hash'))
-            amount = self.parent.format_amount(x['value'])
-            utxo_item = QTreeWidgetItem([address, label, amount, '%d'%height, name[0:10] + '...' + name[-2:]])
-            utxo_item.setFont(0, QFont(MONOSPACE_FONT))
-            utxo_item.setFont(4, QFont(MONOSPACE_FONT))
+            amount = self.parent.format_amount(x['value'], whitespaces=True)
+            utxo_item = SortableTreeWidgetItem([address, label, amount, '%d'%height, name[0:10] + '...' + name[-2:]])
+            for i in range(5):
+                utxo_item.setFont(i, QFont(MONOSPACE_FONT))
+            utxo_item.setTextAlignment(2, Qt.AlignRight)
+            utxo_item.setTextAlignment(3, Qt.AlignRight)
             utxo_item.setData(0, Qt.UserRole, name)
             if self.wallet.is_frozen(address):
                 utxo_item.setBackground(0, ColorScheme.BLUE.as_color(True))

@@ -5,10 +5,21 @@ import os
 import stat
 
 from copy import deepcopy
+
 from .util import (user_dir, print_error, PrintError,
                    NoDynamicFeeEstimates)
+from .i18n import _
 
-from .bitcoin import MAX_FEE_RATE, FEE_TARGETS
+FEE_ETA_TARGETS = [25, 10, 5, 2]
+FEE_DEPTH_TARGETS = [10000000, 5000000, 2000000, 1000000, 500000, 200000, 100000]
+
+# satoshi per kbyte
+FEERATE_MAX_DYNAMIC = 150000
+FEERATE_WARNING_HIGH_FEE = 100000
+FEERATE_FALLBACK_STATIC_FEE = 1000
+FEERATE_DEFAULT_RELAY = 1000
+FEERATE_STATIC_VALUES = [150, 300, 500, 1000, 1500, 2500, 3500, 5000, 7500, 10000]
+
 
 config = None
 
@@ -36,7 +47,6 @@ class SimpleConfig(PrintError):
         2. User configuration (in the user's config directory)
     They are taken in order (1. overrides config options set in 2.)
     """
-    fee_rates = [5000, 10000, 20000, 30000, 50000, 70000, 100000, 150000, 200000, 300000]
 
     def __init__(self, options=None, read_user_config_function=None,
                  read_user_dir_function=None):
@@ -48,6 +58,7 @@ class SimpleConfig(PrintError):
         # a thread-safe way.
         self.lock = threading.RLock()
 
+        self.mempool_fees = {}
         self.fee_estimates = {}
         self.fee_estimates_last_updated = {}
         self.last_time_fee_estimates_requested = 0  # zero ensures immediate fees
@@ -96,7 +107,7 @@ class SimpleConfig(PrintError):
             # Make directory if it does not yet exist.
             if not os.path.exists(path):
                 if os.path.islink(path):
-                    raise BaseException('Dangling link: ' + path)
+                    raise Exception('Dangling link: ' + path)
                 os.mkdir(path)
                 os.chmod(path, stat.S_IRUSR | stat.S_IWUSR | stat.S_IXUSR)
 
@@ -104,8 +115,11 @@ class SimpleConfig(PrintError):
         if self.get('testnet'):
             path = os.path.join(path, 'testnet')
             make_dir(path)
+        elif self.get('regtest'):
+            path = os.path.join(path, 'regtest')
+            make_dir(path)
 
-        self.print_error("electrum directory", path)
+        self.print_error("electrum-zclassic directory", path)
         return path
 
     def rename_config_keys(self, config, keypairs, deprecation_warning=False):
@@ -179,7 +193,7 @@ class SimpleConfig(PrintError):
         if cur_version > max_version:
             return False
         elif cur_version < min_version:
-            raise BaseException(
+            raise Exception(
                 ('config upgrade: unexpected version %d (should be %d-%d)'
                  % (cur_version, min_version, max_version)))
         else:
@@ -200,9 +214,14 @@ class SimpleConfig(PrintError):
             return
         path = os.path.join(self.path, "config")
         s = json.dumps(self.user_config, indent=4, sort_keys=True)
-        with open(path, "w") as f:
-            f.write(s)
-        os.chmod(path, stat.S_IREAD | stat.S_IWRITE)
+        try:
+            with open(path, "w", encoding='utf-8') as f:
+                f.write(s)
+            os.chmod(path, stat.S_IREAD | stat.S_IWRITE)
+        except FileNotFoundError:
+            # datadir probably deleted while running...
+            if os.path.exists(self.path):  # or maybe not?
+                raise
 
     def get_wallet_path(self):
         """Set the path of the wallet."""
@@ -217,10 +236,14 @@ class SimpleConfig(PrintError):
             return path
 
         # default path
+        if not os.path.exists(self.path):
+            raise FileNotFoundError(
+                _('Electrum-Zclassic datadir does not exist. Was it deleted while running?') + '\n' +
+                _('Should be at {}').format(self.path))
         dirpath = os.path.join(self.path, "wallets")
         if not os.path.exists(dirpath):
             if os.path.islink(dirpath):
-                raise BaseException('Dangling link: ' + dirpath)
+                raise Exception('Dangling link: ' + dirpath)
             os.mkdir(dirpath)
             os.chmod(dirpath, stat.S_IRUSR | stat.S_IWUSR | stat.S_IXUSR)
 
@@ -257,64 +280,181 @@ class SimpleConfig(PrintError):
             path = wallet.storage.path
             self.set_key('gui_last_wallet', path)
 
-    def max_fee_rate(self):
-        f = self.get('max_fee_rate', MAX_FEE_RATE)
-        if f==0:
-            f = MAX_FEE_RATE
-        return f
+    def impose_hard_limits_on_fee(func):
+        def get_fee_within_limits(self, *args, **kwargs):
+            fee = func(self, *args, **kwargs)
+            if fee is None:
+                return fee
+            fee = min(FEERATE_MAX_DYNAMIC, fee)
+            fee = max(FEERATE_DEFAULT_RELAY, fee)
+            return fee
+        return get_fee_within_limits
 
-    def dynfee(self, i):
+    @impose_hard_limits_on_fee
+    def eta_to_fee(self, i):
+        """Returns fee in sat/kbyte."""
         if i < 4:
-            j = FEE_TARGETS[i]
+            j = FEE_ETA_TARGETS[i]
             fee = self.fee_estimates.get(j)
         else:
             assert i == 4
             fee = self.fee_estimates.get(2)
             if fee is not None:
                 fee += fee/2
-        if fee is not None:
-            fee = min(5*MAX_FEE_RATE, fee)
         return fee
 
-    def reverse_dynfee(self, fee_per_kb):
+    def fee_to_depth(self, target_fee):
+        depth = 0
+        for fee, s in self.mempool_fees:
+            depth += s
+            if fee <= target_fee:
+                break
+        else:
+            return 0
+        return depth
+
+    @impose_hard_limits_on_fee
+    def depth_to_fee(self, i):
+        """Returns fee in sat/kbyte."""
+        target = self.depth_target(i)
+        depth = 0
+        for fee, s in self.mempool_fees:
+            depth += s
+            if depth > target:
+                break
+        else:
+            return 0
+        return fee * 1000
+
+    def depth_target(self, i):
+        return FEE_DEPTH_TARGETS[i]
+
+    def eta_target(self, i):
+        if i == len(FEE_ETA_TARGETS):
+            return 1
+        return FEE_ETA_TARGETS[i]
+
+    def fee_to_eta(self, fee_per_kb):
         import operator
-        l = list(self.fee_estimates.items()) + [(1, self.dynfee(4))]
+        l = list(self.fee_estimates.items()) + [(1, self.eta_to_fee(4))]
         dist = map(lambda x: (x[0], abs(x[1] - fee_per_kb)), l)
         min_target, min_value = min(dist, key=operator.itemgetter(1))
         if fee_per_kb < self.fee_estimates.get(25)/2:
             min_target = -1
         return min_target
 
+    def depth_tooltip(self, depth):
+        return "%.1f MB from tip"%(depth/1000000)
+
+    def eta_tooltip(self, x):
+        if x < 0:
+            return _('Low fee')
+        elif x == 1:
+            return _('In the next block')
+        else:
+            return _('Within {} blocks').format(x)
+
+    def get_fee_status(self):
+        dyn = self.is_dynfee()
+        mempool = self.use_mempool_fees()
+        pos = self.get_depth_level() if mempool else self.get_fee_level()
+        fee_rate = self.fee_per_kb()
+        target, tooltip = self.get_fee_text(pos, dyn, mempool, fee_rate)
+        return tooltip + '  [%s]'%target if dyn else target + '  [Static]'
+
+    def get_fee_text(self, pos, dyn, mempool, fee_rate):
+        """Returns (text, tooltip) where
+        text is what we target: static fee / num blocks to confirm in / mempool depth
+        tooltip is the corresponding estimate (e.g. num blocks for a static fee)
+        """
+        rate_str = ('%s sat/kB' % round(fee_rate)) if fee_rate is not None else 'unknown'
+        if dyn:
+            if mempool:
+                depth = self.depth_target(pos)
+                text = self.depth_tooltip(depth)
+            else:
+                eta = self.eta_target(pos)
+                text = self.eta_tooltip(eta)
+            tooltip = rate_str
+        else:
+            text = rate_str
+            if mempool and self.has_fee_mempool():
+                depth = self.fee_to_depth(fee_rate)
+                tooltip = self.depth_tooltip(depth)
+            elif not mempool and self.has_fee_etas():
+                eta = self.fee_to_eta(fee_rate)
+                tooltip = self.eta_tooltip(eta)
+            else:
+                tooltip = ''
+        return text, tooltip
+
+    def get_depth_level(self):
+        maxp = len(FEE_DEPTH_TARGETS) - 1
+        return min(maxp, self.get('depth_level', 2))
+
+    def get_fee_level(self):
+        maxp = len(FEE_ETA_TARGETS)  # not (-1) to have "next block"
+        return min(maxp, self.get('fee_level', 2))
+
+    def get_fee_slider(self, dyn, mempool):
+        if dyn:
+            if mempool:
+                pos = self.get_depth_level()
+                maxp = len(FEE_DEPTH_TARGETS) - 1
+                fee_rate = self.depth_to_fee(pos)
+            else:
+                pos = self.get_fee_level()
+                maxp = len(FEE_ETA_TARGETS)  # not (-1) to have "next block"
+                fee_rate = self.eta_to_fee(pos)
+        else:
+            fee_rate = self.fee_per_kb(dyn=False)
+            pos = self.static_fee_index(fee_rate)
+            maxp = 9
+        return maxp, pos, fee_rate
+
     def static_fee(self, i):
-        return self.fee_rates[i]
+        return FEERATE_STATIC_VALUES[i]
 
     def static_fee_index(self, value):
-        dist = list(map(lambda x: abs(x - value), self.fee_rates))
+        if value is None:
+            raise TypeError('static fee cannot be None')
+        dist = list(map(lambda x: abs(x - value), FEERATE_STATIC_VALUES))
         return min(range(len(dist)), key=dist.__getitem__)
 
-    def has_fee_estimates(self):
-        return len(self.fee_estimates)==4
+    def has_fee_etas(self):
+        return len(self.fee_estimates) == 4
+
+    def has_fee_mempool(self):
+        return bool(self.mempool_fees)
+
+    def has_dynamic_fees_ready(self):
+        if self.use_mempool_fees():
+            return self.has_fee_mempool()
+        else:
+            return self.has_fee_etas()
 
     def is_dynfee(self):
-        return self.get('dynamic_fees', True)
+        return bool(self.get('dynamic_fees', False))
 
-    def fee_per_kb(self):
+    def use_mempool_fees(self):
+        return False
+
+    def fee_per_kb(self, dyn=None, mempool=None):
         """Returns sat/kvB fee to pay for a txn.
         Note: might return None.
         """
-        dyn = self.is_dynfee()
+        if dyn is None:
+            dyn = self.is_dynfee()
+        if mempool is None:
+            mempool = self.use_mempool_fees()
         if dyn:
-            fee_rate = self.dynfee(self.get('fee_level', 2))
+            if mempool:
+                fee_rate = self.depth_to_fee(self.get_depth_level())
+            else:
+                fee_rate = self.eta_to_fee(self.get_fee_level())
         else:
-            fee_rate = self.get('fee_per_kb', self.max_fee_rate()/2)
+            fee_rate = self.get('fee_per_kb', FEERATE_FALLBACK_STATIC_FEE)
         return fee_rate
-
-    def fee_per_byte(self):
-        """Returns sat/vB fee to pay for a txn.
-        Note: might return None.
-        """
-        fee_per_kb = self.fee_per_kb()
-        return fee_per_kb / 1000 if fee_per_kb is not None else None
 
     def estimate_fee(self, size):
         fee_per_kb = self.fee_per_kb()
@@ -324,7 +464,7 @@ class SimpleConfig(PrintError):
 
     @classmethod
     def estimate_fee_for_feerate(cls, fee_per_kb, size):
-        return int(fee_per_kb * size / 1000.)
+        return round(fee_per_kb * size / 1000)
 
     def update_fee_estimates(self, key, value):
         self.fee_estimates[key] = value
@@ -335,11 +475,7 @@ class SimpleConfig(PrintError):
         Returns True if an update should be requested.
         """
         now = time.time()
-        prev_updates = self.fee_estimates_last_updated.values()
-        oldest_fee_time = min(prev_updates) if prev_updates else 0
-        stale_fees = now - oldest_fee_time > 7200
-        old_request = now - self.last_time_fee_estimates_requested > 60
-        return stale_fees and old_request
+        return now - self.last_time_fee_estimates_requested > 60
 
     def requested_fee_estimates(self):
         self.last_time_fee_estimates_requested = time.time()
@@ -352,14 +488,14 @@ class SimpleConfig(PrintError):
 
 
 def read_user_config(path):
-    """Parse and store the user config settings in electrum.conf into user_config[]."""
+    """Parse and store the user config settings in electrum-zclassic.conf into user_config[]."""
     if not path:
         return {}
     config_path = os.path.join(path, "config")
     if not os.path.exists(config_path):
         return {}
     try:
-        with open(config_path, "r") as f:
+        with open(config_path, "r", encoding='utf-8') as f:
             data = f.read()
         result = json.loads(data)
     except:

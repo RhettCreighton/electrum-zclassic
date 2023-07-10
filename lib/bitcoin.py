@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 #
-# Electrum - lightweight Bitcoin client
+# Electrum - lightweight ZClassic client
 # Copyright (C) 2011 thomasv@gitorious
 #
 # Permission is hereby granted, free of charge, to any person
@@ -32,82 +32,18 @@ import json
 import ecdsa
 import pyaes
 
-from .util import bfh, bh2u, to_string
+from .util import bfh, bh2u, to_string, BitcoinException
 from . import version
 from .util import print_error, InvalidPassword, assert_bytes, to_bytes, inv_dict
-from . import segwit_addr
+from . import constants
 
-def read_json(filename, default):
-    path = os.path.join(os.path.dirname(__file__), filename)
-    try:
-        with open(path, 'r') as f:
-            r = json.loads(f.read())
-    except:
-        r = default
-    return r
-
-
-
-
-# Version numbers for BIP32 extended keys
-# standard: xprv, xpub
-# segwit in p2sh: yprv, ypub
-# native segwit: zprv, zpub
-XPRV_HEADERS = {
-    'standard': 0x0488ade4,
-    'p2wpkh-p2sh': 0x049d7878,
-    'p2wsh-p2sh': 0x295b005,
-    'p2wpkh': 0x4b2430c,
-    'p2wsh': 0x2aa7a99
-}
-XPUB_HEADERS = {
-    'standard': 0x0488b21e,
-    'p2wpkh-p2sh': 0x049d7cb2,
-    'p2wsh-p2sh': 0x295b43f,
-    'p2wpkh': 0x4b24746,
-    'p2wsh': 0x2aa7ed3
-}
-
-
-class NetworkConstants:
-
-    @classmethod
-    def set_mainnet(cls):
-        cls.TESTNET = False
-        cls.WIF_PREFIX = 0x80
-        cls.ADDRTYPE_P2PKH = 0
-        cls.ADDRTYPE_P2SH = 5
-        cls.SEGWIT_HRP = "bc"
-        cls.GENESIS = "000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f"
-        cls.DEFAULT_PORTS = {'t': '50001', 's': '50002'}
-        cls.DEFAULT_SERVERS = read_json('servers.json', {})
-        cls.CHECKPOINTS = read_json('checkpoints.json', [])
-
-    @classmethod
-    def set_testnet(cls):
-        cls.TESTNET = True
-        cls.WIF_PREFIX = 0xef
-        cls.ADDRTYPE_P2PKH = 111
-        cls.ADDRTYPE_P2SH = 196
-        cls.SEGWIT_HRP = "tb"
-        cls.GENESIS = "000000000933ea01ad0ee984209779baaec3ced90fa3f408719526f8d77f4943"
-        cls.DEFAULT_PORTS = {'t':'51001', 's':'51002'}
-        cls.DEFAULT_SERVERS = read_json('servers_testnet.json', {})
-        cls.CHECKPOINTS = read_json('checkpoints_testnet.json', [])
-
-
-NetworkConstants.set_mainnet()
 
 ################################## transactions
-
-FEE_STEP = 10000
-MAX_FEE_RATE = 300000
-FEE_TARGETS = [25, 10, 5, 2]
 
 COINBASE_MATURITY = 100
 COIN = 100000000
 
-# supported types of transction outputs
+# supported types of transaction outputs
 TYPE_ADDRESS = 0
 TYPE_PUBKEY  = 1
 TYPE_SCRIPT  = 2
@@ -206,7 +142,11 @@ def rev_hex(s):
 
 
 def int_to_hex(i, length=1):
-    assert isinstance(i, int)
+    if not isinstance(i, int):
+        raise TypeError('{} instead of int'.format(i))
+    if i < 0:
+        # two's complement
+        i = pow(256, length) + i
     s = hex(i)[2:].rstrip('L')
     s = "0"*(2*length - len(s)) + s
     return rev_hex(s)
@@ -225,11 +165,11 @@ def var_int(i):
 
 
 def op_push(i):
-    if i<0x4c:
+    if i<0x4c:  # OP_PUSHDATA1
         return int_to_hex(i)
-    elif i<0xff:
+    elif i<=0xff:
         return '4c' + int_to_hex(i)
-    elif i<0xffff:
+    elif i<=0xffff:
         return '4d' + int_to_hex(i,2)
     else:
         return '4e' + int_to_hex(i,4)
@@ -283,10 +223,6 @@ def seed_type(x):
         return 'old'
     elif is_new_seed(x):
         return 'standard'
-    elif is_new_seed(x, version.SEED_PREFIX_SW):
-        return 'segwit'
-    elif is_new_seed(x, version.SEED_PREFIX_2FA):
-        return '2fa'
     return ''
 
 is_seed = lambda x: bool(seed_type(x))
@@ -324,92 +260,64 @@ def hash_160(public_key):
         return md.digest()
 
 
-def hash160_to_b58_address(h160, addrtype, witness_program_version=1):
-    s = bytes([addrtype])
+def hash160_to_b58_address(h160, addrtype):
+    s = addrtype
     s += h160
     return base_encode(s+Hash(s)[0:4], base=58)
 
 
 def b58_address_to_hash160(addr):
     addr = to_bytes(addr, 'ascii')
-    _bytes = base_decode(addr, 25, base=58)
-    return _bytes[0], _bytes[1:21]
+    _bytes = base_decode(addr, 26, base=58)
+    return _bytes[0:2], _bytes[2:22]
 
 
-def hash160_to_p2pkh(h160):
-    return hash160_to_b58_address(h160, NetworkConstants.ADDRTYPE_P2PKH)
+def hash160_to_p2pkh(h160, *, net=None):
+    if net is None:
+        net = constants.net
+    return hash160_to_b58_address(h160, net.ADDRTYPE_P2PKH)
 
-def hash160_to_p2sh(h160):
-    return hash160_to_b58_address(h160, NetworkConstants.ADDRTYPE_P2SH)
+def hash160_to_p2sh(h160, *, net=None):
+    if net is None:
+        net = constants.net
+    return hash160_to_b58_address(h160, net.ADDRTYPE_P2SH)
 
 def public_key_to_p2pkh(public_key):
     return hash160_to_p2pkh(hash_160(public_key))
 
-def hash_to_segwit_addr(h):
-    return segwit_addr.encode(NetworkConstants.SEGWIT_HRP, 0, h)
-
-def public_key_to_p2wpkh(public_key):
-    return hash_to_segwit_addr(hash_160(public_key))
-
-def script_to_p2wsh(script):
-    return hash_to_segwit_addr(sha256(bfh(script)))
-
-def p2wpkh_nested_script(pubkey):
-    pkh = bh2u(hash_160(bfh(pubkey)))
-    return '00' + push_script(pkh)
-
-def p2wsh_nested_script(witness_script):
-    wsh = bh2u(sha256(bfh(witness_script)))
-    return '00' + push_script(wsh)
-
 def pubkey_to_address(txin_type, pubkey):
     if txin_type == 'p2pkh':
         return public_key_to_p2pkh(bfh(pubkey))
-    elif txin_type == 'p2wpkh':
-        return hash_to_segwit_addr(hash_160(bfh(pubkey)))
-    elif txin_type == 'p2wpkh-p2sh':
-        scriptSig = p2wpkh_nested_script(pubkey)
-        return hash160_to_p2sh(hash_160(bfh(scriptSig)))
     else:
         raise NotImplementedError(txin_type)
 
 def redeem_script_to_address(txin_type, redeem_script):
     if txin_type == 'p2sh':
         return hash160_to_p2sh(hash_160(bfh(redeem_script)))
-    elif txin_type == 'p2wsh':
-        return script_to_p2wsh(redeem_script)
-    elif txin_type == 'p2wsh-p2sh':
-        scriptSig = p2wsh_nested_script(redeem_script)
-        return hash160_to_p2sh(hash_160(bfh(scriptSig)))
     else:
         raise NotImplementedError(txin_type)
 
 
-def script_to_address(script):
+def script_to_address(script, *, net=None):
     from .transaction import get_address_from_output_script
-    t, addr = get_address_from_output_script(bfh(script))
+    t, addr = get_address_from_output_script(bfh(script), net=net)
     assert t == TYPE_ADDRESS
     return addr
 
-def address_to_script(addr):
-    witver, witprog = segwit_addr.decode(NetworkConstants.SEGWIT_HRP, addr)
-    if witprog is not None:
-        assert (0 <= witver <= 16)
-        OP_n = witver + 0x50 if witver > 0 else 0
-        script = bh2u(bytes([OP_n]))
-        script += push_script(bh2u(bytes(witprog)))
-        return script
+def address_to_script(addr, *, net=None):
+    if net is None:
+        net = constants.net
     addrtype, hash_160 = b58_address_to_hash160(addr)
-    if addrtype == NetworkConstants.ADDRTYPE_P2PKH:
+    if addrtype == net.ADDRTYPE_P2PKH:
         script = '76a9'                                      # op_dup, op_hash_160
         script += push_script(bh2u(hash_160))
         script += '88ac'                                     # op_equalverify, op_checksig
-    elif addrtype == NetworkConstants.ADDRTYPE_P2SH:
+    elif addrtype == net.ADDRTYPE_P2SH:
         script = 'a9'                                        # op_hash_160
         script += push_script(bh2u(hash_160))
         script += '87'                                       # op_equal
     else:
-        raise BaseException('unknown address type')
+        raise BitcoinException('unknown address type: {}'.format(addrtype))
     return script
 
 def address_to_scripthash(addr):
@@ -435,7 +343,8 @@ assert len(__b43chars) == 43
 def base_encode(v, base):
     """ encode v, which is a string of bytes, to base58."""
     assert_bytes(v)
-    assert base in (58, 43)
+    if base not in (58, 43):
+        raise ValueError('not supported base: {}'.format(base))
     chars = __b58chars
     if base == 43:
         chars = __b43chars
@@ -448,7 +357,7 @@ def base_encode(v, base):
         result.append(chars[mod])
         long_value = div
     result.append(chars[long_value])
-    # Bitcoin does a little leading-zero-compression:
+    # ZClassic does a little leading-zero-compression:
     # leading 0-bytes in the input become leading-1s
     nPad = 0
     for c in v:
@@ -465,13 +374,17 @@ def base_decode(v, length, base):
     """ decode v into a string of len bytes."""
     # assert_bytes(v)
     v = to_bytes(v, 'ascii')
-    assert base in (58, 43)
+    if base not in (58, 43):
+        raise ValueError('not supported base: {}'.format(base))
     chars = __b58chars
     if base == 43:
         chars = __b43chars
     long_value = 0
     for (i, c) in enumerate(v[::-1]):
-        long_value += chars.find(bytes([c])) * (base**i)
+        digit = chars.find(bytes([c]))
+        if digit == -1:
+            raise ValueError('Forbidden character {} for base {}'.format(c, base))
+        long_value += digit * (base**i)
     result = bytearray()
     while long_value >= 256:
         div, mod = divmod(long_value, 256)
@@ -491,6 +404,10 @@ def base_decode(v, length, base):
     return bytes(result)
 
 
+class InvalidChecksum(Exception):
+    pass
+
+
 def EncodeBase58Check(vchIn):
     hash = Hash(vchIn)
     return base_encode(vchIn + hash[0:4], base=58)
@@ -503,43 +420,64 @@ def DecodeBase58Check(psz):
     hash = Hash(key)
     cs32 = hash[0:4]
     if cs32 != csum:
-        return None
+        raise InvalidChecksum('expected {}, actual {}'.format(bh2u(cs32), bh2u(csum)))
     else:
         return key
 
 
 
-# extended key export format for segwit
-
+# backwards compat
+# extended WIF for segwit (used in 3.0.x; but still used internally)
+# the keys in this dict should be a superset of what Imported Wallets can import
 SCRIPT_TYPES = {
     'p2pkh':0,
-    'p2wpkh':1,
-    'p2wpkh-p2sh':2,
     'p2sh':5,
-    'p2wsh':6,
-    'p2wsh-p2sh':7
 }
 
 
-def serialize_privkey(secret, compressed, txin_type):
-    prefix = bytes([(SCRIPT_TYPES[txin_type]+NetworkConstants.WIF_PREFIX)&255])
+def serialize_privkey(secret, compressed, txin_type, internal_use=False):
+    if internal_use:
+        prefix = bytes([(SCRIPT_TYPES[txin_type] + constants.net.WIF_PREFIX) & 255])
+    else:
+        prefix = bytes([constants.net.WIF_PREFIX])
     suffix = b'\01' if compressed else b''
     vchIn = prefix + secret + suffix
-    return EncodeBase58Check(vchIn)
+    base58_wif = EncodeBase58Check(vchIn)
+    if internal_use:
+        return base58_wif
+    else:
+        return '{}:{}'.format(txin_type, base58_wif)
 
 
 def deserialize_privkey(key):
-    # whether the pubkey is compressed should be visible from the keystore
-    vch = DecodeBase58Check(key)
     if is_minikey(key):
         return 'p2pkh', minikey_to_private_key(key), True
-    elif vch:
-        txin_type = inv_dict(SCRIPT_TYPES)[vch[0] - NetworkConstants.WIF_PREFIX]
-        assert len(vch) in [33, 34]
-        compressed = len(vch) == 34
-        return txin_type, vch[1:33], compressed
+
+    txin_type = None
+    if ':' in key:
+        txin_type, key = key.split(sep=':', maxsplit=1)
+        if txin_type not in SCRIPT_TYPES:
+            raise BitcoinException('unknown script type: {}'.format(txin_type))
+    try:
+        vch = DecodeBase58Check(key)
+    except BaseException:
+        neutered_privkey = str(key)[:3] + '..' + str(key)[-2:]
+        raise BitcoinException("cannot deserialize privkey {}"
+                               .format(neutered_privkey))
+
+    if txin_type is None:
+        # keys exported in version 3.0.x encoded script type in first byte
+        txin_type = inv_dict(SCRIPT_TYPES)[vch[0] - constants.net.WIF_PREFIX]
     else:
-        raise BaseException("cannot deserialize", key)
+        # all other keys must have a fixed first byte
+        if vch[0] != constants.net.WIF_PREFIX:
+            raise BitcoinException('invalid prefix ({}) for WIF key'.format(vch[0]))
+
+    if len(vch) not in [33, 34]:
+        raise BitcoinException('invalid vch len for WIF key: {}'.format(len(vch)))
+    compressed = len(vch) == 34
+    return txin_type, vch[1:33], compressed
+
 
 def regenerate_key(pk):
     assert len(pk) == 32
@@ -568,24 +506,17 @@ def address_from_private_key(sec):
     public_key = public_key_from_private_key(privkey, compressed)
     return pubkey_to_address(txin_type, public_key)
 
-def is_segwit_address(addr):
-    try:
-        witver, witprog = segwit_addr.decode(NetworkConstants.SEGWIT_HRP, addr)
-    except Exception as e:
-        return False
-    return witprog is not None
-
 def is_b58_address(addr):
     try:
         addrtype, h = b58_address_to_hash160(addr)
     except Exception as e:
         return False
-    if addrtype not in [NetworkConstants.ADDRTYPE_P2PKH, NetworkConstants.ADDRTYPE_P2SH]:
+    if addrtype not in [constants.net.ADDRTYPE_P2PKH, constants.net.ADDRTYPE_P2SH]:
         return False
     return addr == hash160_to_b58_address(h, addrtype)
 
 def is_address(addr):
-    return is_segwit_address(addr) or is_b58_address(addr)
+    return is_b58_address(addr)
 
 
 def is_private_key(key):
@@ -619,7 +550,7 @@ from ecdsa.util import string_to_number, number_to_string
 
 def msg_magic(message):
     length = bfh(var_int(len(message)))
-    return b"\x18Bitcoin Signed Message:\n" + length + message
+    return b"\x18Zclassic Signed Message:\n" + length + message
 
 
 def verify_message(address, sig, message):
@@ -629,7 +560,7 @@ def verify_message(address, sig, message):
         public_key, compressed = pubkey_from_signature(sig, h)
         # check public key using the address
         pubkey = point_to_ser(public_key.pubkey.point, compressed)
-        for txin_type in ['p2pkh','p2wpkh','p2wpkh-p2sh']:
+        for txin_type in ['p2pkh']:
             addr = pubkey_to_address(txin_type, bh2u(pubkey))
             if address == addr:
                 break
@@ -643,8 +574,8 @@ def verify_message(address, sig, message):
         return False
 
 
-def encrypt_message(message, pubkey):
-    return EC_KEY.encrypt_message(message, bfh(pubkey))
+def encrypt_message(message, pubkey, magic=b'BIE1'):
+    return EC_KEY.encrypt_message(message, bfh(pubkey), magic)
 
 
 def chunks(l, n):
@@ -789,7 +720,7 @@ class EC_KEY(object):
     # ECIES encryption/decryption methods; AES-128-CBC with PKCS7 is used as the cipher; hmac-sha256 is used as the mac
 
     @classmethod
-    def encrypt_message(self, message, pubkey):
+    def encrypt_message(self, message, pubkey, magic=b'BIE1'):
         assert_bytes(message)
 
         pk = ser_to_point(pubkey)
@@ -803,20 +734,20 @@ class EC_KEY(object):
         iv, key_e, key_m = key[0:16], key[16:32], key[32:]
         ciphertext = aes_encrypt_with_iv(key_e, iv, message)
         ephemeral_pubkey = bfh(ephemeral.get_public_key(compressed=True))
-        encrypted = b'BIE1' + ephemeral_pubkey + ciphertext
+        encrypted = magic + ephemeral_pubkey + ciphertext
         mac = hmac.new(key_m, encrypted, hashlib.sha256).digest()
 
         return base64.b64encode(encrypted + mac)
 
-    def decrypt_message(self, encrypted):
+    def decrypt_message(self, encrypted, magic=b'BIE1'):
         encrypted = base64.b64decode(encrypted)
         if len(encrypted) < 85:
             raise Exception('invalid ciphertext: length')
-        magic = encrypted[:4]
+        magic_found = encrypted[:4]
         ephemeral_pubkey = encrypted[4:37]
         ciphertext = encrypted[37:-32]
         mac = encrypted[-32:]
-        if magic != b'BIE1':
+        if magic_found != magic:
             raise Exception('invalid ciphertext: invalid magic bytes')
         try:
             ephemeral_pubkey = ser_to_point(ephemeral_pubkey)
@@ -892,47 +823,60 @@ def _CKD_pub(cK, c, s):
     return cK_n, c_n
 
 
-def xprv_header(xtype):
-    return bfh("%08x" % XPRV_HEADERS[xtype])
+def xprv_header(xtype, *, net=None):
+    if net is None:
+        net = constants.net
+    return bfh("%08x" % net.XPRV_HEADERS[xtype])
 
 
-def xpub_header(xtype):
-    return bfh("%08x" % XPUB_HEADERS[xtype])
+def xpub_header(xtype, *, net=None):
+    if net is None:
+        net = constants.net
+    return bfh("%08x" % net.XPUB_HEADERS[xtype])
 
 
-def serialize_xprv(xtype, c, k, depth=0, fingerprint=b'\x00'*4, child_number=b'\x00'*4):
-    xprv = xprv_header(xtype) + bytes([depth]) + fingerprint + child_number + c + bytes([0]) + k
+def serialize_xprv(xtype, c, k, depth=0, fingerprint=b'\x00'*4,
+                   child_number=b'\x00'*4, *, net=None):
+    xprv = xprv_header(xtype, net=net) \
+           + bytes([depth]) + fingerprint + child_number + c + bytes([0]) + k
     return EncodeBase58Check(xprv)
 
 
-def serialize_xpub(xtype, c, cK, depth=0, fingerprint=b'\x00'*4, child_number=b'\x00'*4):
-    xpub = xpub_header(xtype) + bytes([depth]) + fingerprint + child_number + c + cK
+def serialize_xpub(xtype, c, cK, depth=0, fingerprint=b'\x00'*4,
+                   child_number=b'\x00'*4, *, net=None):
+    xpub = xpub_header(xtype, net=net) \
+           + bytes([depth]) + fingerprint + child_number + c + cK
     return EncodeBase58Check(xpub)
 
 
-def deserialize_xkey(xkey, prv):
+def deserialize_xkey(xkey, prv, *, net=None):
+    if net is None:
+        net = constants.net
     xkey = DecodeBase58Check(xkey)
     if len(xkey) != 78:
-        raise BaseException('Invalid length')
+        raise BitcoinException('Invalid length for extended key: {}'
+                               .format(len(xkey)))
     depth = xkey[4]
     fingerprint = xkey[5:9]
     child_number = xkey[9:13]
     c = xkey[13:13+32]
     header = int('0x' + bh2u(xkey[0:4]), 16)
-    headers = XPRV_HEADERS if prv else XPUB_HEADERS
+    headers = net.XPRV_HEADERS if prv else net.XPUB_HEADERS
     if header not in headers.values():
-        raise BaseException('Invalid xpub format', hex(header))
+        raise BitcoinException('Invalid extended key format: {}'
+                               .format(hex(header)))
     xtype = list(headers.keys())[list(headers.values()).index(header)]
     n = 33 if prv else 32
     K_or_k = xkey[13+n:]
     return xtype, depth, fingerprint, child_number, c, K_or_k
 
 
-def deserialize_xpub(xkey):
-    return deserialize_xkey(xkey, False)
 
-def deserialize_xprv(xkey):
-    return deserialize_xkey(xkey, True)
+def deserialize_xpub(xkey, *, net=None):
+    return deserialize_xkey(xkey, False, net=net)
+
+def deserialize_xprv(xkey, *, net=None):
+    return deserialize_xkey(xkey, True, net=net)
 
 def xpub_type(x):
     return deserialize_xpub(x)[0]
@@ -961,7 +905,7 @@ def xpub_from_xprv(xprv):
 
 
 def bip32_root(seed, xtype):
-    I = hmac.new(b"Bitcoin seed", seed, hashlib.sha512).digest()
+    I = hmac.new(b"ZClassic seed", seed, hashlib.sha512).digest()
     master_k = I[0:32]
     master_c = I[32:]
     K, cK = get_pubkeys_from_secret(master_k)
@@ -976,7 +920,8 @@ def xpub_from_pubkey(xtype, cK):
 
 
 def bip32_derivation(s):
-    assert s.startswith('m/')
+    if not s.startswith('m/'):
+        raise ValueError('invalid bip32 derivation path: {}'.format(s))
     s = s[2:]
     for n in s.split('/'):
         if n == '': continue
@@ -991,7 +936,9 @@ def is_bip32_derivation(x):
         return False
 
 def bip32_private_derivation(xprv, branch, sequence):
-    assert sequence.startswith(branch)
+    if not sequence.startswith(branch):
+        raise ValueError('incompatible branch ({}) and sequence ({})'
+                         .format(branch, sequence))
     if branch == sequence:
         return xprv, xpub_from_xprv(xprv)
     xtype, depth, fingerprint, child_number, c, k = deserialize_xprv(xprv)
@@ -1013,7 +960,9 @@ def bip32_private_derivation(xprv, branch, sequence):
 
 def bip32_public_derivation(xpub, branch, sequence):
     xtype, depth, fingerprint, child_number, c, cK = deserialize_xpub(xpub)
-    assert sequence.startswith(branch)
+    if not sequence.startswith(branch):
+        raise ValueError('incompatible branch ({}) and sequence ({})'
+                         .format(branch, sequence))
     sequence = sequence[len(branch):]
     for n in sequence.split('/'):
         if n == '': continue

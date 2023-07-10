@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 #
-# Electrum - lightweight Bitcoin client
+# Electrum - lightweight ZClassic client
 # Copyright (C) 2015 Thomas Voegtlin
 #
 # Permission is hereby granted, free of charge, to any person
@@ -64,7 +64,7 @@ class WsClientThread(util.DaemonThread):
         # read json file
         rdir = self.config.get('requests_dir')
         n = os.path.join(rdir, 'req', request_id[0], request_id[1], request_id, request_id + '.json')
-        with open(n) as f:
+        with open(n, encoding='utf-8') as f:
             s = f.read()
         d = json.loads(s)
         addr = d.get('address')
